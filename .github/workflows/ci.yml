@@ -1,0 +1,168 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - run: ruff check .
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Run tests
+        run: PYTHONPATH=. pytest tests/ -v --tb=short
+
+  build:
+    name: Build package
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install build twine
+      - name: Build wheel and sdist
+        run: python -m build
+      - name: Check package metadata
+        run: twine check dist/*
+      - name: Install built wheel in a clean venv
+        run: |
+          python -m venv /tmp/smoke-venv
+          /tmp/smoke-venv/bin/pip install "$(echo dist/*.whl)"
+          /tmp/smoke-venv/bin/netpol-audit --version
+          /tmp/smoke-venv/bin/netpol-audit --help
+
+      - name: Create a real kind (Kubernetes in Docker) cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: netpol-audit-ci
+
+      - name: "Integration test: real commands against a real kind cluster"
+        # A real Kubernetes cluster isn't available in this project's
+        # local dev sandbox at all, so this is the ONLY place the
+        # live-cluster path (core/cluster.py) is genuinely verified
+        # end-to-end -- everything else was proven via fixture-based
+        # unit tests plus a real round-trip through the kubernetes
+        # client library's own serialization, but never against an
+        # actual running API server until this step.
+        run: |
+          set -euo pipefail
+          NA=/tmp/smoke-venv/bin/netpol-audit
+          WORK=$(mktemp -d)
+          cd "$WORK"
+
+          echo "::group::Deploy real pods and NetworkPolicies covering every detection case"
+          kubectl create namespace netpol-test
+
+          # Case 1: no NetworkPolicy selects this pod at all -> coverage-gap HIGH finding
+          kubectl run uncovered-pod --image=nginx:alpine --labels=app=uncovered -n netpol-test
+
+          # Case 2: covered by an allow-all rule (ingress: [{}]) -> MEDIUM finding, no coverage gap
+          kubectl run allowall-pod --image=nginx:alpine --labels=app=allowall -n netpol-test
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allowall-policy
+            namespace: netpol-test
+          spec:
+            podSelector:
+              matchLabels:
+                app: allowall
+            policyTypes: ["Ingress"]
+            ingress:
+              - {}
+          EOF
+
+          # Case 3: covered by an explicit 0.0.0.0/0 rule -> HIGH finding, no coverage gap
+          kubectl run opencidr-pod --image=nginx:alpine --labels=app=opencidr -n netpol-test
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: opencidr-policy
+            namespace: netpol-test
+          spec:
+            podSelector:
+              matchLabels:
+                app: opencidr
+            policyTypes: ["Ingress"]
+            ingress:
+              - from:
+                  - ipBlock:
+                      cidr: 0.0.0.0/0
+          EOF
+
+          # Case 4 (control): properly restricted -> no finding at all for this pod
+          kubectl run restricted-pod --image=nginx:alpine --labels=app=restricted -n netpol-test
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: restricted-policy
+            namespace: netpol-test
+          spec:
+            podSelector:
+              matchLabels:
+                app: restricted
+            policyTypes: ["Ingress"]
+            ingress:
+              - from:
+                  - podSelector:
+                      matchLabels:
+                        app: some-specific-client
+          EOF
+
+          kubectl wait --for=condition=Ready pod --all -n netpol-test --timeout=120s
+          kubectl get pods -n netpol-test
+          kubectl get networkpolicy -n netpol-test
+          echo "::endgroup::"
+
+          echo "::group::netpol-audit scan — real findings against the real cluster"
+          $NA scan --namespace netpol-test --json /tmp/findings.json || true
+          cat /tmp/findings.json
+          python3 -c "
+          import json
+          findings = json.load(open('/tmp/findings.json'))
+          titles = [f['title'] for f in findings]
+          descriptions = ' '.join(f.get('description', '') for f in findings)
+
+          assert any('no NetworkPolicy' in t for t in titles), f'expected coverage-gap finding not found: {findings}'
+          assert 'uncovered-pod' in descriptions, f'expected uncovered-pod to be named in a finding: {findings}'
+
+          assert any('allowall-policy' in t for t in titles), f'expected allow-all finding not found: {findings}'
+
+          assert any('0.0.0.0/0' in t and 'opencidr-policy' in t for t in titles), f'expected 0.0.0.0/0 finding not found: {findings}'
+
+          # The control case (restricted-pod) must NOT appear anywhere in any finding
+          all_targets_and_descriptions = ' '.join(f.get('target','') + ' ' + f.get('description','') for f in findings)
+          assert 'restricted-pod' not in all_targets_and_descriptions, f'restricted-pod should not appear in any finding: {findings}'
+
+          print(f'OK: all {len(findings)} expected finding patterns confirmed, no false positive on the control case')
+          "
+          echo "::endgroup::"
+
+          echo "All integration checks passed."

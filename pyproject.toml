@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netpol-audit"
+version = "0.1.0"
+description = "Kubernetes NetworkPolicy coverage & permissiveness auditing"
+requires-python = ">=3.11"
+dependencies = ["click>=8.1.0", "rich>=13.7.0", "kubernetes>=29.0.0"]
+
+[project.scripts]
+netpol-audit = "netpol_audit.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["netpol_audit*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]

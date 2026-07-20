@@ -1,0 +1,9 @@
+click>=8.1.0
+rich>=13.7.0
+kubernetes>=29.0.0
+
+# Dev / test
+pytest>=8.2.0
+ruff>=0.4.0
+build
+twine
