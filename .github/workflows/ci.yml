@@ -182,6 +182,47 @@ jobs:
                       cidr: 0.0.0.0/0
           EOF
 
+          # Case 7: annotated for Linkerd injection but has no linkerd-proxy sidecar
+          # container -> HIGH finding. Doesn't need real Linkerd installed -- the
+          # check only inspects the annotation and container names, both of which a
+          # plain pod can carry.
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: linkerd-mismatch-pod
+            namespace: netpol-test
+            labels:
+              app: linkerdmismatch
+            annotations:
+              linkerd.io/inject: enabled
+          spec:
+            containers:
+              - name: app
+                image: nginx:alpine
+          EOF
+
+          # Case 8 (control): annotated for injection AND has a container literally
+          # named linkerd-proxy (a placeholder image -- no real Linkerd needed) ->
+          # correctly "meshed" from this check's point of view, no finding.
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: linkerd-injected-pod
+            namespace: netpol-test
+            labels:
+              app: linkerdinjected
+            annotations:
+              linkerd.io/inject: enabled
+          spec:
+            containers:
+              - name: app
+                image: nginx:alpine
+              - name: linkerd-proxy
+                image: nginx:alpine
+          EOF
+
           kubectl wait --for=condition=Ready pod --all -n netpol-test --timeout=120s
           kubectl get pods -n netpol-test
           kubectl get networkpolicy -n netpol-test
@@ -218,7 +259,16 @@ jobs:
           # No Istio is installed on this cluster, so no mTLS/PeerAuthentication findings should appear
           assert not any('PeerAuthentication' in t for t in titles), f'unexpected mTLS finding on a cluster with no Istio installed: {findings}'
 
-          # The control case (restricted-pod, restricted on BOTH directions) must NOT appear anywhere in any finding
+          linkerd_findings = [f for f in findings if 'Linkerd' in f['title']]
+          assert any('annotated for Linkerd injection but not actually meshed' in f['title'] for f in linkerd_findings), f'expected a Linkerd injection-mismatch finding: {findings}'
+          assert 'linkerd-mismatch-pod' in ' '.join(f.get('description', '') for f in linkerd_findings), f'expected linkerd-mismatch-pod to be named in a Linkerd finding: {findings}'
+          # linkerd-injected-pod HAS no NetworkPolicy applied to it (that's a separate,
+          # expected coverage-gap finding, not what's being checked here) but it IS
+          # correctly meshed, so it must not appear in any Linkerd-specific finding.
+          assert 'linkerd-injected-pod' not in ' '.join(f.get('description', '') for f in linkerd_findings), f'linkerd-injected-pod (correctly meshed) should not appear in a Linkerd finding: {linkerd_findings}'
+
+          # The control case (restricted-pod, restricted on BOTH ingress and egress,
+          # and not annotated for Linkerd injection) must NOT appear anywhere in any finding
           all_targets_and_descriptions = ' '.join(f.get('target','') + ' ' + f.get('description','') for f in findings)
           assert 'restricted-pod' not in all_targets_and_descriptions, f'restricted-pod should not appear in any finding: {findings}'
 
@@ -238,6 +288,33 @@ jobs:
           result = fetch_peer_authentications()
           assert result is None, f'expected None (no Istio CRD installed), got: {result}'
           print('OK: fetch_peer_authentications correctly returned None against a cluster with no Istio installed')
+          "
+          echo "::endgroup::"
+
+          echo "::group::core/linkerd.py — real pod/namespace fetch against the real cluster"
+          # Direct test of the live fetch functions, not just through the CLI. No
+          # real Linkerd control plane is needed for this -- the check only reads
+          # pod annotations and container names, both of which the plain test pods
+          # created above genuinely carry.
+          /tmp/smoke-venv/bin/python3 -c "
+          from kubernetes import config
+          config.load_kube_config()
+          from netpol_audit.core.linkerd import analyze_injection, fetch_namespace_inject_annotations, fetch_pod_injection_info
+
+          pods = fetch_pod_injection_info(namespace='netpol-test')
+          by_name = {p.name: p for p in pods}
+          assert by_name['linkerd-mismatch-pod'].inject_annotation == 'enabled'
+          assert by_name['linkerd-mismatch-pod'].has_proxy_container is False
+          assert by_name['linkerd-injected-pod'].inject_annotation == 'enabled'
+          assert by_name['linkerd-injected-pod'].has_proxy_container is True
+          assert by_name['uncovered-pod'].inject_annotation is None
+
+          ns_annotations = fetch_namespace_inject_annotations(namespace='netpol-test')
+          assert ns_annotations == {'netpol-test': None}, f'expected no linkerd.io/inject annotation on the namespace itself: {ns_annotations}'
+
+          findings = analyze_injection(pods, ns_annotations)
+          assert len(findings) == 1 and 'linkerd-mismatch-pod' in findings[0]['description']
+          print('OK: fetch_pod_injection_info / fetch_namespace_inject_annotations / analyze_injection all correct against the real cluster')
           "
           echo "::endgroup::"
 

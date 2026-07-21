@@ -3,6 +3,31 @@
 All notable changes to this project are documented here. See the
 [README](README.md) for current features and usage.
 
+### v0.6.0
+- feat: **Linkerd mTLS awareness** — `scan` now also compares Linkerd injection intent against
+  reality (read-only, part of the normal scan, no new flag needed): a pod or namespace annotated
+  with `linkerd.io/inject: enabled` (pod-level overrides namespace-level, per Linkerd's own
+  precedence) but whose pod has no `linkerd-proxy` sidecar container is flagged HIGH — it looks
+  meshed but its traffic is entirely unencrypted, exactly as if Linkerd were never involved. This
+  happens when injection is enabled after a pod already exists (the mutating webhook only runs at
+  pod creation) or the injection webhook itself is down/misconfigured. Unlike Istio's
+  `PeerAuthentication`, Linkerd has no central object recording "mTLS is off here," so this only
+  shows up by comparing declared intent against the pod's actual container list.
+- fix: RBAC-denied namespace listing (403) no longer aborts the whole scan — the Linkerd check
+  falls back to evaluating pods on their own annotation only, without namespace-level inheritance,
+  and `--namespace` scans only need to read that one namespace, not list the whole cluster.
+- test: 12 new tests for `core/linkerd.py`'s pure precedence/interpretation logic (pod-level
+  overriding namespace-level, correctly-injected pods, unmeshed namespaces, namespace-grouped
+  finding output) plus fixtures for the RBAC-fallback case. The live pod/namespace fetch needs a
+  real cluster and is only exercised in CI — but unlike the Istio check, that verification doesn't
+  need a real Linkerd control plane installed, since the check only inspects pod annotations and
+  container names.
+- CI: the real `kind` cluster integration test now deploys two real pods for this check — one
+  annotated for injection without a proxy container (must be flagged) and one with a placeholder
+  `linkerd-proxy` container present (must not be flagged) — and directly exercises
+  `fetch_pod_injection_info` / `fetch_namespace_inject_annotations` / `analyze_injection` against
+  the real cluster, not just through the CLI.
+
 ### v0.5.0
 - feat: **Istio mTLS awareness** — `scan` now also reads Istio's `PeerAuthentication` custom
   resources (read-only, part of the normal scan, no new flag needed) and flags `PERMISSIVE` mode
