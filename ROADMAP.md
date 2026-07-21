@@ -36,8 +36,8 @@
 - `netpol-audit verify-enforcement`: active CNI baseline check. Deploys a real client pod, a real
   server pod, and a deny-all ingress NetworkPolicy, then attempts a real connection to confirm
   whether it's actually blocked — catching the gap where NetworkPolicy objects exist and are
-  well-formed but the cluster's CNI (e.g. kind's own default kindnet) silently doesn't enforce
-  them at all, which the rest of this tool can't detect since it only audits *declared*
+  well-formed but the cluster's CNI silently doesn't enforce them at all (some CNIs and CNI
+  configurations don't), which the rest of this tool can't detect since it only audits *declared*
   configuration via the Kubernetes API, not actual enforced network behavior.
 
 ## Next

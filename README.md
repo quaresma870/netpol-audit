@@ -43,8 +43,8 @@ Early, actively developed. Covers:
   *declared* NetworkPolicy objects via the Kubernetes API; this instead
   catches the case where those objects exist and are well-formed but
   the cluster's CNI silently doesn't enforce them at all (true of some
-  CNIs, including kind's own default kindnet) — a CRITICAL finding,
-  since it means every NetworkPolicy in the cluster is non-functional.
+  CNIs and CNI configurations) — a CRITICAL finding, since it means
+  every NetworkPolicy in the cluster is non-functional.
 
 NetworkPolicy semantics here are genuinely counter-intuitive
 (`ingress: []` denies everything; `ingress: [{}]` allows everything —
@@ -114,12 +114,13 @@ NetworkPolicies covering every detection case on both ingress and
 egress (coverage gap, allow-all rule, explicit 0.0.0.0/0, and a
 properly-restricted control case), and runs `netpol-audit scan`,
 `history`, and `--baseline` gating against it for real. It also runs
-`verify-enforcement` for real against this same cluster — since kind's
-default CNI (kindnet) doesn't enforce NetworkPolicy at all, CI asserts
-that this is correctly detected as a CRITICAL finding, confirming the
-active-probe path works end-to-end against a CNI actually exhibiting
-the exact gap it exists to catch. This is the first and only place
-this tool's live-cluster path is genuinely verified end-to-end, not
+`verify-enforcement` for real against this same cluster — since
+whether the cluster's actual CNI enforces NetworkPolicy depends on the
+specific kindnet build in use, CI doesn't assume a fixed outcome; it
+asserts the command's real exit-code/finding-severity contract holds
+for whatever the live probe result actually is. This is the first and
+only place this tool's live-cluster path is genuinely verified
+end-to-end, not
 just unit-tested against fixture data.
 
 ---

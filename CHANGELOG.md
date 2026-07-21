@@ -8,16 +8,16 @@ All notable changes to this project are documented here. See the
   NetworkPolicy at all, not just that NetworkPolicy objects exist and are well-formed. Deploys a
   real client pod, a real server pod, and a deny-all ingress NetworkPolicy, then attempts a real
   connection to check whether it's actually blocked. Reports a CRITICAL finding if the connection
-  succeeds anyway (some CNIs, including kind's own default kindnet, accept NetworkPolicy objects
-  without enforcing them). Supports `--namespace` (default: create/delete a temporary one),
-  `--keep` (skip cleanup for debugging), and `--json`.
+  succeeds anyway (some CNIs and CNI configurations accept NetworkPolicy objects without enforcing
+  them). Supports `--namespace` (default: create/delete a temporary one), `--keep` (skip cleanup
+  for debugging), and `--json`.
 - test: 2 new tests for the pure probe-result interpretation logic in `core/enforcement.py`. The
   live pod/policy/exec mechanics need a real cluster and are only exercised in CI, matching how
   `core/cluster.py`'s live-fetching functions are tested.
-- CI: the real `kind` cluster integration test now also runs `verify-enforcement` for real and
-  asserts it correctly reports a CRITICAL finding — kindnet (kind's default CNI) doesn't enforce
-  NetworkPolicy, so this exercises the active-probe path against a CNI genuinely exhibiting the
-  exact gap the command exists to catch.
+- CI: the real `kind` cluster integration test now also runs `verify-enforcement` for real.
+  Whether the cluster's actual CNI enforces NetworkPolicy depends on the specific kindnet build in
+  use, so rather than hardcoding an expected outcome, CI asserts the command's real
+  exit-code/finding-severity contract holds for whatever the live probe result actually is.
 
 ### v0.3.0
 - feat: **egress policy analysis** — coverage-gap and permissive-rule detection now apply

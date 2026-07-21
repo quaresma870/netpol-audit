@@ -1,9 +1,9 @@
 """Active enforcement verification: confirms the cluster's CNI
 actually enforces NetworkPolicy, not just that NetworkPolicy objects
-exist and are well-formed. Some CNIs (including kind's own default
-kindnet) silently accept NetworkPolicy objects without enforcing them
-at all -- a real, easy-to-miss gap the rest of this tool can't detect,
-since everything else here audits the *declared* configuration via the
+exist and are well-formed. Some CNIs (and some CNI configurations)
+silently accept NetworkPolicy objects without enforcing them at all --
+a real, easy-to-miss gap the rest of this tool can't detect, since
+everything else here audits the *declared* configuration via the
 Kubernetes API, not actual enforced network behavior.
 
 The approach: deploy a real client pod and a real server pod, apply a
@@ -45,8 +45,8 @@ def interpret_probe_result(connection_blocked: bool) -> dict | None:
             "real connection from another pod succeeded anyway. This means the "
             "cluster's CNI is not enforcing NetworkPolicy at all -- every "
             "NetworkPolicy in this cluster, no matter how well-formed, is currently "
-            "non-functional. (Some CNIs, including kind's own default kindnet, don't "
-            "enforce NetworkPolicy out of the box.)"
+            "non-functional. (Some CNIs and CNI configurations don't enforce "
+            "NetworkPolicy out of the box.)"
         ),
         "remediation": "Install or enable a NetworkPolicy-enforcing CNI (e.g. Calico, "
                         "Cilium, or a kind cluster configured with one) -- the CNI, not "

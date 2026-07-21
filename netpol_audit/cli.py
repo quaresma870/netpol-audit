@@ -106,10 +106,9 @@ def verify_enforcement(namespace, kubeconfig, context, timeout, keep, json_outpu
     Deploys a real client pod, a real server pod, and a deny-all ingress
     NetworkPolicy, then attempts a real connection to check whether it's
     actually blocked. Auditing declared NetworkPolicy objects (as 'scan'
-    does) can't catch this: some CNIs (e.g. kind's default kindnet) accept
-    NetworkPolicy objects without enforcing them, silently making every
-    policy in the cluster non-functional. This creates and deletes real
-    cluster resources.
+    does) can't catch this: some CNIs accept NetworkPolicy objects without
+    enforcing them, silently making every policy in the cluster
+    non-functional. This creates and deletes real cluster resources.
     """
     from netpol_audit.core.cluster import ClusterConnectionError, load_kube_config
     from netpol_audit.core.enforcement import run_enforcement_probe
