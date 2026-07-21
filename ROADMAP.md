@@ -26,6 +26,12 @@
   of the blanket "fail on any CRITICAL/HIGH" default, which still applies when `--baseline` is
   omitted.
 
+### v0.3.0
+- Egress policy analysis: the same coverage-gap and permissive-rule questions v0.1 asked about
+  ingress now apply symmetrically to egress — pods not selected by any NetworkPolicy with
+  'Egress' in policyTypes, egress rules with no `to` restriction, and egress rules with an
+  explicit `0.0.0.0/0` CIDR.
+
 ## Next
 
 ### mTLS / service mesh awareness (Istio, Linkerd)
@@ -44,10 +50,3 @@ policy objects exist and are perfectly well-formed — a real,
 easy-to-miss gap this tool doesn't currently detect, since it audits
 the *declared* configuration via the Kubernetes API, not actual
 enforced network behavior).
-
-### Egress policy analysis
-v0.1 focuses entirely on ingress. The same coverage-gap and
-permissive-rule questions apply symmetrically to egress traffic
-(unrestricted egress is how a compromised pod exfiltrates data or
-reaches command-and-control infrastructure) and are a natural,
-similarly-scoped extension.

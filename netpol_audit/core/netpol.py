@@ -21,6 +21,13 @@ genuinely counter-intuitive and easy to get backwards:
 - The same empty-means-match-all semantics apply per-field within an
   otherwise-populated rule too: a rule with `ports` set but no `from`
   still matches traffic from ANY source on those ports.
+- Egress is the symmetric counterpart of all of the above: `to` plays
+  the same role as `from` (an egress rule's `to` field empty/omitted
+  means "matches all destinations"), `egress: []` denies all egress
+  while `egress: [{}]` allows all egress, and a pod not selected by
+  any NetworkPolicy with 'Egress' in policyTypes is non-isolated for
+  egress just as it is for ingress -- ALL outbound traffic allowed by
+  default.
 """
 
 from __future__ import annotations
@@ -44,6 +51,9 @@ class NetworkPolicyInfo:
     has_ingress_rules: bool  # True if `ingress` key is present at all (even as [])
     ingress_rules_allow_all: bool  # True if any single ingress rule has no from/ports restriction
     ingress_allows_0_0_0_0: bool  # True if any ingress rule explicitly allows 0.0.0.0/0
+    has_egress_rules: bool = False  # True if `egress` key is present at all (even as [])
+    egress_rules_allow_all: bool = False  # True if any single egress rule has no to/ports restriction
+    egress_allows_0_0_0_0: bool = False  # True if any egress rule explicitly allows 0.0.0.0/0
 
 
 def _labels_match(pod_labels: dict[str, str], selector_labels: dict[str, str]) -> bool:
@@ -54,6 +64,30 @@ def _labels_match(pod_labels: dict[str, str], selector_labels: dict[str, str]) -
     if not selector_labels:
         return True
     return all(pod_labels.get(k) == v for k, v in selector_labels.items())
+
+
+def _scan_rules(rules: list[dict], peer_key: str) -> tuple[bool, bool]:
+    """Shared by ingress ('from') and egress ('to') rule scanning --
+    the peer-matching semantics (an empty/missing peer list matches
+    everything; an ipBlock CIDR of 0.0.0.0/0 is a full-open allowance)
+    are identical for both directions, only the field name storing the
+    peer list differs."""
+    allow_all = False
+    allow_0000 = False
+    for rule in rules:
+        rule = rule or {}
+        peers = rule.get(peer_key)
+        if not peers:
+            # No peers at all (or an empty list) on a present rule ->
+            # matches all sources/destinations, per the API
+            # reference's explicit documented semantics for this field.
+            allow_all = True
+        else:
+            for peer in peers:
+                ip_block = (peer or {}).get("ipBlock") or {}
+                if ip_block.get("cidr") == "0.0.0.0/0":
+                    allow_0000 = True
+    return allow_all, allow_0000
 
 
 def parse_network_policy(raw_spec: dict, name: str, namespace: str) -> NetworkPolicyInfo:
@@ -69,23 +103,11 @@ def parse_network_policy(raw_spec: dict, name: str, namespace: str) -> NetworkPo
 
     ingress = raw_spec.get("ingress")
     has_ingress_rules = ingress is not None
-    ingress_rules = ingress or []
+    ingress_allow_all, ingress_allow_0000 = _scan_rules(ingress or [], "from")
 
-    allow_all = False
-    allow_0000 = False
-    for rule in ingress_rules:
-        rule = rule or {}
-        peers = rule.get("from")
-        if not peers:
-            # No `from` at all (or an empty list) on a present rule ->
-            # matches all sources, per the API reference's explicit
-            # documented semantics for this field.
-            allow_all = True
-        else:
-            for peer in peers:
-                ip_block = (peer or {}).get("ipBlock") or {}
-                if ip_block.get("cidr") == "0.0.0.0/0":
-                    allow_0000 = True
+    egress = raw_spec.get("egress")
+    has_egress_rules = egress is not None
+    egress_allow_all, egress_allow_0000 = _scan_rules(egress or [], "to")
 
     return NetworkPolicyInfo(
         name=name,
@@ -93,8 +115,11 @@ def parse_network_policy(raw_spec: dict, name: str, namespace: str) -> NetworkPo
         pod_selector_labels=selector_labels,
         policy_types=policy_types,
         has_ingress_rules=has_ingress_rules,
-        ingress_rules_allow_all=allow_all,
-        ingress_allows_0_0_0_0=allow_0000,
+        ingress_rules_allow_all=ingress_allow_all,
+        ingress_allows_0_0_0_0=ingress_allow_0000,
+        has_egress_rules=has_egress_rules,
+        egress_rules_allow_all=egress_allow_all,
+        egress_allows_0_0_0_0=egress_allow_0000,
     )
 
 

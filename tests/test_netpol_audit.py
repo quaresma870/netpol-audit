@@ -91,6 +91,82 @@ class TestParseNetworkPolicySemantics:
             name="egress-only", namespace="default",
         )
         assert info.has_ingress_rules is False
+        assert info.has_egress_rules is True
+        assert info.egress_rules_allow_all is True
+
+    def test_missing_egress_key_entirely_has_no_egress_rules(self):
+        """Symmetric to the ingress-only case above: an ingress-only
+        policy has no 'egress' key at all."""
+        info = parse_network_policy(
+            {"podSelector": {}, "policyTypes": ["Ingress"], "ingress": [{}]},
+            name="ingress-only", namespace="default",
+        )
+        assert info.has_egress_rules is False
+
+    def test_empty_egress_list_denies_all_not_allow_all(self):
+        """egress: [] means DENY all egress -- same semantics as
+        ingress: [] for the symmetric 'to' field."""
+        info = parse_network_policy(
+            {"podSelector": {"matchLabels": {"app": "web"}}, "policyTypes": ["Egress"], "egress": []},
+            name="deny-all-egress", namespace="default",
+        )
+        assert info.has_egress_rules is True
+        assert info.egress_rules_allow_all is False
+
+    def test_single_empty_egress_rule_allows_all(self):
+        """egress: [{}] (one rule with neither to nor ports) means
+        ALLOW all egress."""
+        info = parse_network_policy(
+            {"podSelector": {}, "policyTypes": ["Egress"], "egress": [{}]},
+            name="allow-all-egress", namespace="default",
+        )
+        assert info.egress_rules_allow_all is True
+
+    def test_explicit_to_is_restrictive(self):
+        info = parse_network_policy(
+            {
+                "podSelector": {"matchLabels": {"app": "web"}}, "policyTypes": ["Egress"],
+                "egress": [{"to": [{"podSelector": {"matchLabels": {"app": "db"}}}]}],
+            },
+            name="restrictive-egress", namespace="default",
+        )
+        assert info.egress_rules_allow_all is False
+
+    def test_explicit_0_0_0_0_egress_cidr_flagged(self):
+        info = parse_network_policy(
+            {
+                "podSelector": {}, "policyTypes": ["Egress"],
+                "egress": [{"to": [{"ipBlock": {"cidr": "0.0.0.0/0"}}]}],
+            },
+            name="open-cidr-egress", namespace="default",
+        )
+        assert info.egress_allows_0_0_0_0 is True
+        assert info.egress_rules_allow_all is False
+
+    def test_scoped_egress_cidr_not_flagged_as_0_0_0_0(self):
+        info = parse_network_policy(
+            {
+                "podSelector": {}, "policyTypes": ["Egress"],
+                "egress": [{"to": [{"ipBlock": {"cidr": "10.0.0.0/8"}}]}],
+            },
+            name="scoped-cidr-egress", namespace="default",
+        )
+        assert info.egress_allows_0_0_0_0 is False
+
+    def test_ingress_and_egress_parsed_independently(self):
+        """A policy covering both directions can be permissive on one
+        and restrictive on the other -- the two must not leak into
+        each other."""
+        info = parse_network_policy(
+            {
+                "podSelector": {}, "policyTypes": ["Ingress", "Egress"],
+                "ingress": [{"from": [{"podSelector": {"matchLabels": {"app": "frontend"}}}]}],
+                "egress": [{}],
+            },
+            name="mixed", namespace="default",
+        )
+        assert info.ingress_rules_allow_all is False
+        assert info.egress_rules_allow_all is True
 
     def test_real_kubernetes_client_serialization_round_trip(self):
         """Confirms the data shape assumption end-to-end through the
@@ -109,6 +185,23 @@ class TestParseNetworkPolicySemantics:
         sanitized = client.ApiClient().sanitize_for_serialization(spec)
         info = parse_network_policy(sanitized, name="test-policy", namespace="default")
         assert info.ingress_allows_0_0_0_0 is True
+
+    def test_real_kubernetes_client_serialization_round_trip_egress(self):
+        """Same round-trip confirmation as above, for the egress side
+        of the client's object model (V1NetworkPolicyEgressRule /
+        `to` instead of `from`)."""
+        from kubernetes import client
+
+        spec = client.V1NetworkPolicySpec(
+            pod_selector=client.V1LabelSelector(match_labels={"app": "web"}),
+            policy_types=["Egress"],
+            egress=[client.V1NetworkPolicyEgressRule(
+                to=[client.V1NetworkPolicyPeer(ip_block=client.V1IPBlock(cidr="0.0.0.0/0"))]
+            )],
+        )
+        sanitized = client.ApiClient().sanitize_for_serialization(spec)
+        info = parse_network_policy(sanitized, name="test-policy", namespace="default")
+        assert info.egress_allows_0_0_0_0 is True
 
 
 class TestFindUncoveredPods:
@@ -166,28 +259,45 @@ class TestFindUncoveredPods:
         uncovered = find_uncovered_pods(pods, policies, direction="Ingress")
         assert len(uncovered) == 1
 
+    def test_ingress_only_policy_does_not_cover_egress(self):
+        """Symmetric to the egress-only case above."""
+        pods = [PodInfo(name="web-1", namespace="default", labels={"app": "web"})]
+        policies = [NetworkPolicyInfo(
+            name="ingress-only", namespace="default", pod_selector_labels={"app": "web"},
+            policy_types=["Ingress"], has_ingress_rules=True,
+            ingress_rules_allow_all=False, ingress_allows_0_0_0_0=False,
+        )]
+        uncovered = find_uncovered_pods(pods, policies, direction="Egress")
+        assert len(uncovered) == 1
+
     def test_no_pods_no_policies_produces_no_findings(self):
         assert find_uncovered_pods([], []) == []
 
 
 class TestAnalyze:
     def test_uncovered_pods_produce_high_finding(self):
+        """An uncovered pod is non-isolated in BOTH directions, so it
+        produces two HIGH findings -- one for ingress, one for
+        egress -- not just one."""
         pods = [PodInfo(name="web-1", namespace="default", labels={"app": "web"})]
         findings = analyze(pods, [])
-        assert len(findings) == 1
-        assert findings[0]["severity"] == "HIGH"
-        assert "web-1" in findings[0]["description"]
+        assert len(findings) == 2
+        assert all(f["severity"] == "HIGH" for f in findings)
+        assert all("web-1" in f["description"] for f in findings)
+        titles = " ".join(f["title"] for f in findings)
+        assert "ingress" in titles and "egress" in titles
 
     def test_allow_all_rule_produces_medium_finding(self):
         pods = [PodInfo(name="web-1", namespace="default", labels={"app": "web"})]
         policies = [NetworkPolicyInfo(
             name="allow-all", namespace="default", pod_selector_labels={"app": "web"},
-            policy_types=["Ingress"], has_ingress_rules=True,
+            policy_types=["Ingress", "Egress"], has_ingress_rules=True,
             ingress_rules_allow_all=True, ingress_allows_0_0_0_0=False,
+            has_egress_rules=True, egress_rules_allow_all=False, egress_allows_0_0_0_0=False,
         )]
         findings = analyze(pods, policies)
         assert any(f["severity"] == "MEDIUM" and "allow-all" in f["target"] for f in findings)
-        # Pod IS covered (a policy selects it), so no HIGH coverage-gap finding
+        # Pod IS covered (a policy selects it, in both directions), so no HIGH coverage-gap finding
         assert not any(f["severity"] == "HIGH" and "web-1" in f.get("description", "") for f in findings)
 
     def test_0_0_0_0_produces_high_finding(self):
@@ -200,12 +310,24 @@ class TestAnalyze:
         findings = analyze(pods, policies)
         assert any(f["severity"] == "HIGH" and "0.0.0.0/0" in f["title"] for f in findings)
 
+    def test_0_0_0_0_egress_produces_high_finding(self):
+        pods = []
+        policies = [NetworkPolicyInfo(
+            name="open-egress", namespace="default", pod_selector_labels={},
+            policy_types=["Egress"], has_ingress_rules=False,
+            ingress_rules_allow_all=False, ingress_allows_0_0_0_0=False,
+            has_egress_rules=True, egress_rules_allow_all=False, egress_allows_0_0_0_0=True,
+        )]
+        findings = analyze(pods, policies)
+        assert any(f["severity"] == "HIGH" and "0.0.0.0/0" in f["title"] and "egress" in f["title"] for f in findings)
+
     def test_fully_covered_and_restrictive_produces_info_only(self):
         pods = [PodInfo(name="web-1", namespace="default", labels={"app": "web"})]
         policies = [NetworkPolicyInfo(
             name="restrictive", namespace="default", pod_selector_labels={"app": "web"},
-            policy_types=["Ingress"], has_ingress_rules=True,
+            policy_types=["Ingress", "Egress"], has_ingress_rules=True,
             ingress_rules_allow_all=False, ingress_allows_0_0_0_0=False,
+            has_egress_rules=True, egress_rules_allow_all=False, egress_allows_0_0_0_0=False,
         )]
         findings = analyze(pods, policies)
         assert len(findings) == 1

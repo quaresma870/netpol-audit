@@ -16,15 +16,18 @@ sbom-audit and netwatch repos.
 
 Early, actively developed. Covers:
 
-- **Coverage gaps** — pods not selected by any NetworkPolicy at all. A
-  pod not selected by any NetworkPolicy is *non-isolated*: **all**
-  ingress traffic is allowed by default, regardless of what other
-  NetworkPolicies exist for other pods in the namespace. This is the
-  single most important thing to check for.
+- **Coverage gaps** — pods not selected by any NetworkPolicy at all, for
+  **both ingress and egress**. A pod not selected by any NetworkPolicy
+  is *non-isolated*: **all** traffic in that direction is allowed by
+  default, regardless of what other NetworkPolicies exist for other
+  pods in the namespace. This is the single most important thing to
+  check for.
 - **Permissive-rule detection** — NetworkPolicies that exist and select
-  pods but don't actually restrict anything: an ingress rule with no
-  `from` restriction (matches all sources, per Kubernetes' own
-  documented semantics), or an explicit `0.0.0.0/0` CIDR allowance.
+  pods but don't actually restrict anything, checked symmetrically on
+  both sides: an ingress rule with no `from` restriction or an egress
+  rule with no `to` restriction (matches all sources/destinations, per
+  Kubernetes' own documented semantics), or an explicit `0.0.0.0/0`
+  CIDR allowance on either side.
 - **Historical tracking** — `scan --db findings.db` records every run
   (pod/policy counts, findings) to a local SQLite database; `netpol-audit
   history --db findings.db` shows a trend table of past runs.
@@ -38,8 +41,9 @@ NetworkPolicy semantics here are genuinely counter-intuitive
 (`ingress: []` denies everything; `ingress: [{}]` allows everything —
 a single empty object vs an empty list) — confirmed against the
 official Kubernetes API reference before writing any detection logic,
-not assumed. See `core/netpol.py`'s own docstring for the full
-breakdown.
+not assumed. Egress (`egress`/`to`) follows the exact same semantics
+as ingress (`ingress`/`from`). See `core/netpol.py`'s own docstring
+for the full breakdown.
 
 See [ROADMAP.md](ROADMAP.md) for what's planned next.
 
@@ -91,11 +95,12 @@ Builds the real wheel, installs it in a clean venv, and — since a real
 Kubernetes cluster isn't available in a typical local dev sandbox —
 spins up a real [kind](https://kind.sigs.k8s.io/) (Kubernetes in
 Docker) cluster via `helm/kind-action`, deploys real pods and
-NetworkPolicies covering every detection case (coverage gap, allow-all
-rule, explicit 0.0.0.0/0, and a properly-restricted control case), and
-runs `netpol-audit scan` against it for real. This is the first and
-only place this tool's live-cluster path is genuinely verified
-end-to-end, not just unit-tested against fixture data.
+NetworkPolicies covering every detection case on both ingress and
+egress (coverage gap, allow-all rule, explicit 0.0.0.0/0, and a
+properly-restricted control case), and runs `netpol-audit scan`,
+`history`, and `--baseline` gating against it for real. This is the
+first and only place this tool's live-cluster path is genuinely
+verified end-to-end, not just unit-tested against fixture data.
 
 ---
 
