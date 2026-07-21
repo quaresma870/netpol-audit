@@ -45,6 +45,13 @@ Early, actively developed. Covers:
   the cluster's CNI silently doesn't enforce them at all (true of some
   CNIs and CNI configurations) — a CRITICAL finding, since it means
   every NetworkPolicy in the cluster is non-functional.
+- **mTLS / service mesh awareness (Istio)** — NetworkPolicy is only the
+  L3/L4 layer. `scan` also checks Istio's `PeerAuthentication` objects
+  (read-only, part of the normal scan): `PERMISSIVE` mode (accepts
+  both mTLS and plaintext — Istio's own default, often left unlocked
+  after rollout) and `DISABLE` mode are flagged. A cluster with no
+  Istio installed is unaffected — this check silently finds nothing to
+  say rather than erroring.
 
 NetworkPolicy semantics here are genuinely counter-intuitive
 (`ingress: []` denies everything; `ingress: [{}]` allows everything —
@@ -81,6 +88,10 @@ netpol-audit scan --baseline baseline.json
 # Actively verify the cluster's CNI actually enforces NetworkPolicy (creates
 # and deletes real test pods/policy; add --namespace to reuse an existing one)
 netpol-audit verify-enforcement
+
+# 'scan' also picks up Istio PeerAuthentication mTLS findings automatically
+# when Istio is installed -- no separate command needed
+netpol-audit scan
 ```
 
 ## Project structure
@@ -95,12 +106,14 @@ netpol-audit/
 │   │   ├── analyze.py        # orchestrates parsing into findings
 │   │   ├── db.py             # --db historical persistence (stdlib sqlite3)
 │   │   ├── baseline.py       # --baseline CI gating
-│   │   └── enforcement.py    # verify-enforcement — active CNI enforcement probe
+│   │   ├── enforcement.py    # verify-enforcement — active CNI enforcement probe
+│   │   └── mesh.py           # Istio PeerAuthentication mTLS-mode findings (part of scan)
 │   └── reports/terminal.py   # findings table + history trend table
 ├── tests/
 │   ├── test_netpol_audit.py      # fixture-based, including a real kubernetes-client round trip
 │   ├── test_persistence.py       # --db / --baseline
-│   └── test_enforcement.py       # verify-enforcement's pure result-interpretation logic
+│   ├── test_enforcement.py       # verify-enforcement's pure result-interpretation logic
+│   └── test_mesh.py              # Istio PeerAuthentication mode interpretation
 └── .github/workflows/ci.yml      # spins up a real `kind` cluster for full integration testing
 ```
 
@@ -118,10 +131,14 @@ properly-restricted control case), and runs `netpol-audit scan`,
 whether the cluster's actual CNI enforces NetworkPolicy depends on the
 specific kindnet build in use, CI doesn't assume a fixed outcome; it
 asserts the command's real exit-code/finding-severity contract holds
-for whatever the live probe result actually is. This is the first and
-only place this tool's live-cluster path is genuinely verified
-end-to-end, not
-just unit-tested against fixture data.
+for whatever the live probe result actually is. It also confirms
+`core/mesh.py`'s Istio check degrades gracefully against this cluster,
+which genuinely has no Istio installed: `scan` produces no mTLS
+findings and no error, and a direct call to `fetch_peer_authentications`
+confirms the underlying CRD lookup returns `None` rather than raising.
+This is the first and only place this tool's live-cluster path is
+genuinely verified end-to-end, not just unit-tested against fixture
+data.
 
 ---
 

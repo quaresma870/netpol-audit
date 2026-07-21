@@ -188,7 +188,13 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::netpol-audit scan — real findings against the real cluster"
-          $NA scan --namespace netpol-test --json /tmp/findings.json || true
+          # This kind cluster has no Istio installed, so the mTLS check
+          # (core/mesh.py) should degrade gracefully -- no crash, no
+          # "Skipping Istio mTLS check" warning (that only fires on an
+          # unexpected non-403/404 error), and no mTLS findings.
+          $NA scan --namespace netpol-test --json /tmp/findings.json 2>&1 | tee /tmp/scan-output.txt || true
+          ! grep -q "Skipping Istio mTLS check" /tmp/scan-output.txt || { echo "unexpected error while probing for Istio (should 404 cleanly on a cluster without it)"; exit 1; }
+          ! grep -q "Detected Istio service mesh" /tmp/scan-output.txt || { echo "unexpectedly detected an Istio service mesh on a cluster that doesn't have one"; exit 1; }
           cat /tmp/findings.json
           python3 -c "
           import json
@@ -209,11 +215,29 @@ jobs:
 
           assert any('0.0.0.0/0 egress' in t and 'egress-opencidr-policy' in t for t in titles), f'expected egress 0.0.0.0/0 finding not found: {findings}'
 
+          # No Istio is installed on this cluster, so no mTLS/PeerAuthentication findings should appear
+          assert not any('PeerAuthentication' in t for t in titles), f'unexpected mTLS finding on a cluster with no Istio installed: {findings}'
+
           # The control case (restricted-pod, restricted on BOTH directions) must NOT appear anywhere in any finding
           all_targets_and_descriptions = ' '.join(f.get('target','') + ' ' + f.get('description','') for f in findings)
           assert 'restricted-pod' not in all_targets_and_descriptions, f'restricted-pod should not appear in any finding: {findings}'
 
           print(f'OK: all {len(findings)} expected finding patterns confirmed, no false positive on the control case')
+          "
+          echo "::endgroup::"
+
+          echo "::group::core/mesh.py — real CustomObjectsApi call against the real cluster (no Istio installed)"
+          # Direct test of fetch_peer_authentications' live behavior, not just
+          # through the CLI: confirms the security.istio.io CRD 404 is caught
+          # and returns None cleanly, rather than raising, against a real API
+          # server that genuinely doesn't have the CRD installed.
+          /tmp/smoke-venv/bin/python3 -c "
+          from kubernetes import config
+          config.load_kube_config()
+          from netpol_audit.core.mesh import fetch_peer_authentications
+          result = fetch_peer_authentications()
+          assert result is None, f'expected None (no Istio CRD installed), got: {result}'
+          print('OK: fetch_peer_authentications correctly returned None against a cluster with no Istio installed')
           "
           echo "::endgroup::"
 
