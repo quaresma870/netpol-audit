@@ -245,4 +245,24 @@ jobs:
           $NA scan --namespace netpol-test --baseline /tmp/lenient-baseline.json
           echo "::endgroup::"
 
+          echo "::group::verify-enforcement — real active enforcement probe against the real kind cluster"
+          # kind's default CNI (kindnet, used by helm/kind-action since no custom
+          # CNI is configured) does NOT enforce NetworkPolicy at all -- this is
+          # the exact real-world gap 'verify-enforcement' exists to catch, so a
+          # CRITICAL finding and a non-zero exit code are the CORRECT outcome
+          # here, not a test failure. Checked via --json rather than grepping the
+          # rendered terminal table, which can wrap/truncate in a non-tty runner.
+          if $NA verify-enforcement --timeout 90 --json /tmp/enforcement-findings.json; then
+            echo "expected verify-enforcement to fail against kindnet's non-enforcing CNI"
+            exit 1
+          fi
+          cat /tmp/enforcement-findings.json
+          python3 -c "
+          import json
+          findings = json.load(open('/tmp/enforcement-findings.json'))
+          assert any(f['severity'] == 'CRITICAL' and 'does not enforce' in f['title'] for f in findings), f'expected a CRITICAL non-enforcement finding: {findings}'
+          print('OK: verify-enforcement correctly detected that kindnet does not enforce NetworkPolicy')
+          "
+          echo "::endgroup::"
+
           echo "All integration checks passed."
