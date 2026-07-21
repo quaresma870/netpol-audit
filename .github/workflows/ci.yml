@@ -116,7 +116,10 @@ jobs:
                       cidr: 0.0.0.0/0
           EOF
 
-          # Case 4 (control): properly restricted -> no finding at all for this pod
+          # Case 4 (control): properly restricted on BOTH ingress and egress -> no
+          # finding at all for this pod. (Only restricting ingress would no longer
+          # be a true no-finding control case now that egress is analyzed too --
+          # it would show up in an egress coverage-gap finding instead.)
           kubectl run restricted-pod --image=nginx:alpine --labels=app=restricted -n netpol-test
           cat <<'EOF' | kubectl apply -f -
           apiVersion: networking.k8s.io/v1
@@ -128,12 +131,55 @@ jobs:
             podSelector:
               matchLabels:
                 app: restricted
-            policyTypes: ["Ingress"]
+            policyTypes: ["Ingress", "Egress"]
             ingress:
               - from:
                   - podSelector:
                       matchLabels:
                         app: some-specific-client
+            egress:
+              - to:
+                  - podSelector:
+                      matchLabels:
+                        app: some-specific-client
+          EOF
+
+          # Case 5: covered by an egress allow-all rule (egress: [{}]) -> MEDIUM
+          # finding on the egress side, symmetric to case 2.
+          kubectl run egress-allowall-pod --image=nginx:alpine --labels=app=egressallowall -n netpol-test
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: egress-allowall-policy
+            namespace: netpol-test
+          spec:
+            podSelector:
+              matchLabels:
+                app: egressallowall
+            policyTypes: ["Egress"]
+            egress:
+              - {}
+          EOF
+
+          # Case 6: covered by an explicit egress 0.0.0.0/0 rule -> HIGH finding on
+          # the egress side, symmetric to case 3.
+          kubectl run egress-opencidr-pod --image=nginx:alpine --labels=app=egressopencidr -n netpol-test
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: egress-opencidr-policy
+            namespace: netpol-test
+          spec:
+            podSelector:
+              matchLabels:
+                app: egressopencidr
+            policyTypes: ["Egress"]
+            egress:
+              - to:
+                  - ipBlock:
+                      cidr: 0.0.0.0/0
           EOF
 
           kubectl wait --for=condition=Ready pod --all -n netpol-test --timeout=120s
@@ -157,7 +203,13 @@ jobs:
 
           assert any('0.0.0.0/0' in t and 'opencidr-policy' in t for t in titles), f'expected 0.0.0.0/0 finding not found: {findings}'
 
-          # The control case (restricted-pod) must NOT appear anywhere in any finding
+          assert any('no NetworkPolicy' in t and 'all egress traffic allowed' in t for t in titles), f'expected an egress coverage-gap finding: {findings}'
+
+          assert any('egress-allowall-policy' in t and 'egress' in t for t in titles), f'expected egress allow-all finding not found: {findings}'
+
+          assert any('0.0.0.0/0 egress' in t and 'egress-opencidr-policy' in t for t in titles), f'expected egress 0.0.0.0/0 finding not found: {findings}'
+
+          # The control case (restricted-pod, restricted on BOTH directions) must NOT appear anywhere in any finding
           all_targets_and_descriptions = ' '.join(f.get('target','') + ' ' + f.get('description','') for f in findings)
           assert 'restricted-pod' not in all_targets_and_descriptions, f'restricted-pod should not appear in any finding: {findings}'
 

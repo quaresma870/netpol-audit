@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. See the
 [README](README.md) for current features and usage.
 
+### v0.3.0
+- feat: **egress policy analysis** — coverage-gap and permissive-rule detection now apply
+  symmetrically to egress, not just ingress: pods not selected by any NetworkPolicy with
+  'Egress' in policyTypes (all outbound traffic allowed by default), egress rules with no `to`
+  restriction (allow-all), and egress rules with an explicit `0.0.0.0/0` CIDR.
+- refactor: `core/analyze.py`'s ingress finding-generation logic factored into
+  direction-parameterized helpers (`_coverage_gap_findings`, `_permissive_rule_findings`) shared
+  by both ingress and egress, instead of duplicating it.
+- test: 12 new tests mirroring every existing ingress semantics/coverage test for egress
+  (including a real kubernetes-client serialization round trip for `V1NetworkPolicyEgressRule`),
+  plus a test confirming ingress and egress are parsed independently on a mixed policy.
+- CI: the real `kind` cluster integration test now deploys egress-specific cases (egress
+  allow-all, egress explicit 0.0.0.0/0) alongside the existing ingress cases, and the
+  properly-restricted control case is now restricted on both directions.
+
 ### v0.2.0
 - feat: **`--db` historical tracking** — `scan --db <path>` records every run's pod/policy counts
   and findings to a local SQLite database (stdlib `sqlite3`, no new dependency).
