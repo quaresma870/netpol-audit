@@ -52,6 +52,15 @@ Early, actively developed. Covers:
   after rollout) and `DISABLE` mode are flagged. A cluster with no
   Istio installed is unaffected — this check silently finds nothing to
   say rather than erroring.
+- **mTLS / service mesh awareness (Linkerd)** — Linkerd has no
+  declarative mode field like Istio's; mTLS is automatic once a pod
+  has the `linkerd-proxy` sidecar injected. `scan` compares injection
+  *intent* (the `linkerd.io/inject: enabled` annotation, at the pod or
+  namespace level) against *reality* (whether the proxy container is
+  actually present), flagging pods that look meshed but aren't — a gap
+  with no dedicated object to audit otherwise, e.g. from injection
+  being enabled after the pod already existed, or a down/misconfigured
+  injection webhook.
 
 NetworkPolicy semantics here are genuinely counter-intuitive
 (`ingress: []` denies everything; `ingress: [{}]` allows everything —
@@ -89,8 +98,8 @@ netpol-audit scan --baseline baseline.json
 # and deletes real test pods/policy; add --namespace to reuse an existing one)
 netpol-audit verify-enforcement
 
-# 'scan' also picks up Istio PeerAuthentication mTLS findings automatically
-# when Istio is installed -- no separate command needed
+# 'scan' also picks up Istio PeerAuthentication mTLS findings and Linkerd
+# injection mismatches automatically -- no separate command needed
 netpol-audit scan
 ```
 
@@ -107,13 +116,15 @@ netpol-audit/
 │   │   ├── db.py             # --db historical persistence (stdlib sqlite3)
 │   │   ├── baseline.py       # --baseline CI gating
 │   │   ├── enforcement.py    # verify-enforcement — active CNI enforcement probe
-│   │   └── mesh.py           # Istio PeerAuthentication mTLS-mode findings (part of scan)
+│   │   ├── mesh.py           # Istio PeerAuthentication mTLS-mode findings (part of scan)
+│   │   └── linkerd.py        # Linkerd injection-mismatch findings (part of scan)
 │   └── reports/terminal.py   # findings table + history trend table
 ├── tests/
 │   ├── test_netpol_audit.py      # fixture-based, including a real kubernetes-client round trip
 │   ├── test_persistence.py       # --db / --baseline
 │   ├── test_enforcement.py       # verify-enforcement's pure result-interpretation logic
-│   └── test_mesh.py              # Istio PeerAuthentication mode interpretation
+│   ├── test_mesh.py              # Istio PeerAuthentication mode interpretation
+│   └── test_linkerd.py           # Linkerd injection-intent-vs-reality interpretation
 └── .github/workflows/ci.yml      # spins up a real `kind` cluster for full integration testing
 ```
 
@@ -136,9 +147,14 @@ for whatever the live probe result actually is. It also confirms
 which genuinely has no Istio installed: `scan` produces no mTLS
 findings and no error, and a direct call to `fetch_peer_authentications`
 confirms the underlying CRD lookup returns `None` rather than raising.
-This is the first and only place this tool's live-cluster path is
-genuinely verified end-to-end, not just unit-tested against fixture
-data.
+And it deploys two real test pods for the Linkerd check — one
+annotated for injection without a `linkerd-proxy` container (must be
+flagged) and one with a placeholder `linkerd-proxy` container present
+(must not be flagged) — confirming `core/linkerd.py`'s live pod/namespace
+fetch and interpretation logic end-to-end without needing a real
+Linkerd control plane installed. This is the first and only place this
+tool's live-cluster path is genuinely verified end-to-end, not just
+unit-tested against fixture data.
 
 ---
 

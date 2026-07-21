@@ -29,8 +29,7 @@ this tool.
 
 Linkerd isn't covered here: its default mTLS is automatic at the proxy
 level for meshed pods rather than a single declarative mode field like
-Istio's, so a comparable check needs a different model (see
-ROADMAP.md).
+Istio's, so it needs a different model entirely -- see core/linkerd.py.
 """
 
 from __future__ import annotations

@@ -38,6 +38,11 @@ def scan(namespace, kubeconfig, context, json_output, db_path, baseline_path):
         fetch_pods,
         load_kube_config,
     )
+    from netpol_audit.core.linkerd import (
+        analyze_injection,
+        fetch_namespace_inject_annotations,
+        fetch_pod_injection_info,
+    )
     from netpol_audit.core.mesh import analyze_peer_authentications, fetch_peer_authentications
     from netpol_audit.reports.terminal import print_findings
 
@@ -61,6 +66,13 @@ def scan(namespace, kubeconfig, context, json_output, db_path, baseline_path):
     if peer_auths is not None:
         console.print(f"Detected Istio service mesh ({len(peer_auths)} PeerAuthentication object(s)).")
         findings.extend(analyze_peer_authentications(peer_auths))
+
+    try:
+        injected_pods = fetch_pod_injection_info(namespace=namespace)
+        namespace_inject_annotations = fetch_namespace_inject_annotations(namespace=namespace)
+        findings.extend(analyze_injection(injected_pods, namespace_inject_annotations))
+    except Exception as exc:
+        console.print(f"[yellow]![/yellow] Skipping Linkerd injection check: {exc}")
 
     label = f"namespace: {namespace}" if namespace else "all namespaces"
     print_findings(label, findings)

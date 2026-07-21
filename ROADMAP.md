@@ -46,12 +46,18 @@
   `PERMISSIVE` mode (accepts both mTLS and plaintext) and `DISABLE` mode (no mTLS at all). A
   cluster with no Istio installed produces no findings from this check, not an error.
 
+### v0.6.0
+- mTLS / service mesh awareness (Linkerd), completing the item above. Linkerd's default mTLS is
+  automatic at the proxy level for meshed pods rather than a single declarative mode field like
+  Istio's `PeerAuthentication`, so `scan` instead compares injection *intent* (the
+  `linkerd.io/inject: enabled` annotation, pod-level overriding namespace-level) against *reality*
+  (whether the pod actually has a `linkerd-proxy` sidecar container) and flags the mismatch —
+  a pod that looks meshed but isn't, with traffic just as unencrypted as if it were never meshed
+  at all, and no dedicated object recording that fact the way Istio's PeerAuthentication does.
+
 ## Next
 
-### Linkerd mTLS awareness
-The Istio check above doesn't cover Linkerd: Linkerd's default mTLS is automatic at the proxy
-level for meshed pods (identity issued to every injected sidecar), rather than a single
-declarative mode field like Istio's `PeerAuthentication`. A comparable check needs a different
-model — likely: confirming pods are actually proxy-injected (not just that injection is enabled at
-the namespace level), and, for clusters using Linkerd's policy API, auditing `Server` /
-`AuthorizationPolicy` objects for rules that accept unauthenticated/non-mTLS traffic.
+Nothing currently planned — both items originally scoped for mTLS / service mesh awareness
+(Istio and Linkerd) have shipped. Auditing Linkerd's newer policy API (`Server` /
+`AuthorizationPolicy` objects, for rules that accept unauthenticated/non-mTLS traffic on clusters
+using it) would be a natural, narrower follow-up if it turns out to matter in practice.
