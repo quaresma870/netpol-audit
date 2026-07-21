@@ -24,7 +24,12 @@ def cli():
 @click.option("--kubeconfig", default=None, help="Path to a kubeconfig file (default: standard kubectl resolution).")
 @click.option("--context", default=None, help="kubeconfig context to use (default: current context).")
 @click.option("--json", "json_output", default=None, type=click.Path())
-def scan(namespace, kubeconfig, context, json_output):
+@click.option("--db", "db_path", default=None, type=click.Path(),
+              help="SQLite database path — records this run for historical tracking (see 'netpol-audit history').")
+@click.option("--baseline", "baseline_path", default=None, type=click.Path(exists=True),
+              help="JSON file of max allowed findings per severity (e.g. {\"max_high\": 0}) for CI gating. "
+                   "Without this, the default gate is: fail on any CRITICAL/HIGH finding.")
+def scan(namespace, kubeconfig, context, json_output, db_path, baseline_path):
     """Scan a Kubernetes cluster for NetworkPolicy coverage gaps and overly permissive rules."""
     from netpol_audit.core.analyze import analyze
     from netpol_audit.core.cluster import (
@@ -55,8 +60,35 @@ def scan(namespace, kubeconfig, context, json_output):
             json_module.dump(findings, f, indent=2)
         console.print(f"[green]✔[/green] Wrote {len(findings)} finding(s) to {json_output}")
 
-    if any(f["severity"] in ("CRITICAL", "HIGH") for f in findings):
+    if db_path:
+        from netpol_audit.core.db import record_run
+        run_id = record_run(db_path, label=label, pod_count=len(pods), policy_count=len(policies), findings=findings)
+        console.print(f"[green]✔[/green] Recorded run #{run_id} to {db_path}")
+
+    if baseline_path:
+        from netpol_audit.core.baseline import evaluate_baseline, load_baseline
+        limits = load_baseline(baseline_path)
+        violations = evaluate_baseline(findings, limits)
+        if violations:
+            console.print("[red]✘ Baseline gate failed:[/red]")
+            for v in violations:
+                console.print(f"  [red]•[/red] {v}")
+            sys.exit(1)
+        console.print("[green]✔[/green] Baseline gate passed.")
+    elif any(f["severity"] in ("CRITICAL", "HIGH") for f in findings):
         sys.exit(1)
+
+
+@cli.command()
+@click.option("--db", "db_path", required=True, type=click.Path(exists=True), help="SQLite database written by previous 'scan --db' runs.")
+@click.option("--limit", default=20, show_default=True, help="Number of most recent runs to show.")
+def history(db_path, limit):
+    """Show past scan runs recorded via 'scan --db' as a trend table."""
+    from netpol_audit.core.db import fetch_history
+    from netpol_audit.reports.terminal import print_history
+
+    runs = fetch_history(db_path, limit=limit)
+    print_history(runs)
 
 
 def main():

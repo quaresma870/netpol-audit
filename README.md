@@ -14,7 +14,7 @@ sbom-audit and netwatch repos.
 
 ## Status
 
-Early, actively developed. v0.1 covers:
+Early, actively developed. Covers:
 
 - **Coverage gaps** — pods not selected by any NetworkPolicy at all. A
   pod not selected by any NetworkPolicy is *non-isolated*: **all**
@@ -25,6 +25,14 @@ Early, actively developed. v0.1 covers:
   pods but don't actually restrict anything: an ingress rule with no
   `from` restriction (matches all sources, per Kubernetes' own
   documented semantics), or an explicit `0.0.0.0/0` CIDR allowance.
+- **Historical tracking** — `scan --db findings.db` records every run
+  (pod/policy counts, findings) to a local SQLite database; `netpol-audit
+  history --db findings.db` shows a trend table of past runs.
+- **CI gating** — `scan --baseline baseline.json` exits non-zero only
+  when findings exceed a configurable per-severity budget (e.g.
+  `{"max_critical": 0, "max_high": 0, "max_medium": 3}`), for use as a
+  deployment-pipeline gate. Without `--baseline`, the default gate is
+  "fail on any CRITICAL/HIGH finding."
 
 NetworkPolicy semantics here are genuinely counter-intuitive
 (`ingress: []` denies everything; `ingress: [{}]` allows everything —
@@ -49,6 +57,13 @@ pip install .
 netpol-audit scan                          # all namespaces, current kubeconfig context
 netpol-audit scan --namespace production
 netpol-audit scan --context my-cluster --json findings.json
+
+netpol-audit scan --db findings.db         # also record this run for historical tracking
+netpol-audit history --db findings.db      # trend table of past runs, most recent first
+
+# CI gate: exit non-zero only if findings exceed a configured per-severity budget
+echo '{"max_critical": 0, "max_high": 0, "max_medium": 3}' > baseline.json
+netpol-audit scan --baseline baseline.json
 ```
 
 ## Project structure
@@ -56,13 +71,17 @@ netpol-audit scan --context my-cluster --json findings.json
 ```
 netpol-audit/
 ├── netpol_audit/
-│   ├── cli.py                # scan
+│   ├── cli.py                # scan, history
 │   ├── core/
 │   │   ├── netpol.py         # NetworkPolicy semantics — parsing + coverage-gap detection
 │   │   ├── cluster.py        # real kubeconfig-authenticated cluster fetching
-│   │   └── analyze.py        # orchestrates parsing into findings
-│   └── reports/terminal.py
-├── tests/test_netpol_audit.py    # fixture-based, including a real kubernetes-client round trip
+│   │   ├── analyze.py        # orchestrates parsing into findings
+│   │   ├── db.py             # --db historical persistence (stdlib sqlite3)
+│   │   └── baseline.py       # --baseline CI gating
+│   └── reports/terminal.py   # findings table + history trend table
+├── tests/
+│   ├── test_netpol_audit.py      # fixture-based, including a real kubernetes-client round trip
+│   └── test_persistence.py       # --db / --baseline
 └── .github/workflows/ci.yml      # spins up a real `kind` cluster for full integration testing
 ```
 

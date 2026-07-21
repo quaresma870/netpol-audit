@@ -165,4 +165,32 @@ jobs:
           "
           echo "::endgroup::"
 
+          echo "::group::--db historical tracking + 'history' command against the real cluster"
+          # This cluster has real HIGH findings, so the default "fail on any
+          # CRITICAL/HIGH" gate exits 1 even though the run+recording itself
+          # succeeds -- same reasoning as the '|| true' on the --json run above.
+          $NA scan --namespace netpol-test --db /tmp/netpol.db || true
+          $NA scan --namespace netpol-test --db /tmp/netpol.db || true
+          # COLUMNS=200 avoids rich wrapping/truncating cell text in the
+          # non-tty CI runner, which would otherwise break the grep below.
+          COLUMNS=200 $NA history --db /tmp/netpol.db | tee /tmp/history-output.txt
+          [ "$(grep -c 'namespace: netpol-test' /tmp/history-output.txt)" -eq 2 ] || { echo "expected 2 recorded runs in history output"; exit 1; }
+          echo "::endgroup::"
+
+          echo "::group::--baseline CI gating against the real cluster"
+          # This cluster's real findings include a HIGH (coverage gap) and a MEDIUM
+          # (allow-all) and another HIGH (0.0.0.0/0) -- a baseline that forbids any
+          # HIGH must fail the gate.
+          echo '{"max_critical": 0, "max_high": 0}' > /tmp/strict-baseline.json
+          if $NA scan --namespace netpol-test --baseline /tmp/strict-baseline.json; then
+            echo "expected scan to fail against a strict baseline that forbids HIGH findings"
+            exit 1
+          fi
+
+          # A baseline permissive enough for the real findings must pass (exit 0)
+          # even though HIGH/MEDIUM findings exist.
+          echo '{"max_critical": 0, "max_high": 5, "max_medium": 5}' > /tmp/lenient-baseline.json
+          $NA scan --namespace netpol-test --baseline /tmp/lenient-baseline.json
+          echo "::endgroup::"
+
           echo "All integration checks passed."

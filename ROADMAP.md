@@ -14,6 +14,18 @@
   NetworkPolicies covering every detection case, real `netpol-audit
   scan` run against it.
 
+### v0.2.0
+- `--db` flag on `scan` for historical tracking: every run's pod/policy counts and findings are
+  recorded to a local SQLite database (stdlib `sqlite3`, no new dependency).
+- `netpol-audit history --db <path>` — a terminal trend table of past runs, most recent first,
+  with severity counts side by side so a regression or improvement across runs is visible at a
+  glance (the CLI-native form of the "dashboard" this item originally described).
+- `--baseline` flag on `scan` for CI-friendly gating: a JSON file of `max_<severity>` counts
+  (e.g. `{"max_critical": 0, "max_high": 0, "max_medium": 3}`) that the run's findings are
+  checked against, exiting non-zero only when a severity exceeds its configured budget — instead
+  of the blanket "fail on any CRITICAL/HIGH" default, which still applies when `--baseline` is
+  omitted.
+
 ## Next
 
 ### mTLS / service mesh awareness (Istio, Linkerd)
@@ -39,10 +51,3 @@ permissive-rule questions apply symmetrically to egress traffic
 (unrestricted egress is how a compromised pod exfiltrates data or
 reaches command-and-control infrastructure) and are a natural,
 similarly-scoped extension.
-
-### Persistence + dashboard + CI integration mode
-A `--db` flag for historical tracking (matching the sibling repos'
-pattern), and a CI-friendly mode (exit-code-based pass/fail against a
-configurable policy baseline) for running this as a gate in a
-cluster's own deployment pipeline, not just an ad-hoc manual audit
-tool.
