@@ -245,4 +245,34 @@ jobs:
           $NA scan --namespace netpol-test --baseline /tmp/lenient-baseline.json
           echo "::endgroup::"
 
+          echo "::group::verify-enforcement — real active enforcement probe against the real kind cluster"
+          # Whether the cluster's actual CNI (kindnet here, since helm/kind-action
+          # doesn't configure a custom one) enforces NetworkPolicy depends on the
+          # specific kindnet build in use -- modern kindnet builds do enforce it,
+          # older ones and other non-enforcing CNIs don't. So this doesn't hardcode
+          # an expected outcome; it confirms the command's real contract holds for
+          # whatever the actual live probe result is: a CRITICAL finding must come
+          # with a non-zero exit code, and a confirmed-enforcing result must exit
+          # zero. Checked via --json rather than grepping the rendered terminal
+          # table, which can wrap/truncate in a non-tty runner.
+          set +e
+          $NA verify-enforcement --timeout 90 --json /tmp/enforcement-findings.json
+          ENFORCEMENT_EXIT=$?
+          set -e
+          cat /tmp/enforcement-findings.json
+          python3 -c "
+          import json
+          findings = json.load(open('/tmp/enforcement-findings.json'))
+          exit_code = $ENFORCEMENT_EXIT
+          critical = [f for f in findings if f['severity'] == 'CRITICAL']
+          if critical:
+              assert exit_code != 0, f'expected non-zero exit when a CRITICAL finding is present: {findings}'
+              print(f'OK: verify-enforcement correctly detected the CNI does not enforce NetworkPolicy: {critical[0][\"title\"]}')
+          else:
+              assert exit_code == 0, f'expected zero exit with no CRITICAL finding: {findings}'
+              assert any('correctly enforces' in f['title'] for f in findings), f'expected an enforcement-confirmed finding: {findings}'
+              print('OK: verify-enforcement correctly confirmed the CNI enforces NetworkPolicy')
+          "
+          echo "::endgroup::"
+
           echo "All integration checks passed."

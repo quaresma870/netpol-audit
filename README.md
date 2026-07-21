@@ -36,6 +36,15 @@ Early, actively developed. Covers:
   `{"max_critical": 0, "max_high": 0, "max_medium": 3}`), for use as a
   deployment-pipeline gate. Without `--baseline`, the default gate is
   "fail on any CRITICAL/HIGH finding."
+- **Active CNI enforcement verification** — `netpol-audit
+  verify-enforcement` deploys a real client pod, a real server pod, and
+  a deny-all ingress NetworkPolicy, then attempts a real connection to
+  check whether it's actually blocked. Everything above audits
+  *declared* NetworkPolicy objects via the Kubernetes API; this instead
+  catches the case where those objects exist and are well-formed but
+  the cluster's CNI silently doesn't enforce them at all (true of some
+  CNIs and CNI configurations) — a CRITICAL finding, since it means
+  every NetworkPolicy in the cluster is non-functional.
 
 NetworkPolicy semantics here are genuinely counter-intuitive
 (`ingress: []` denies everything; `ingress: [{}]` allows everything —
@@ -68,6 +77,10 @@ netpol-audit history --db findings.db      # trend table of past runs, most rece
 # CI gate: exit non-zero only if findings exceed a configured per-severity budget
 echo '{"max_critical": 0, "max_high": 0, "max_medium": 3}' > baseline.json
 netpol-audit scan --baseline baseline.json
+
+# Actively verify the cluster's CNI actually enforces NetworkPolicy (creates
+# and deletes real test pods/policy; add --namespace to reuse an existing one)
+netpol-audit verify-enforcement
 ```
 
 ## Project structure
@@ -75,17 +88,19 @@ netpol-audit scan --baseline baseline.json
 ```
 netpol-audit/
 ├── netpol_audit/
-│   ├── cli.py                # scan, history
+│   ├── cli.py                # scan, history, verify-enforcement
 │   ├── core/
 │   │   ├── netpol.py         # NetworkPolicy semantics — parsing + coverage-gap detection
 │   │   ├── cluster.py        # real kubeconfig-authenticated cluster fetching
 │   │   ├── analyze.py        # orchestrates parsing into findings
 │   │   ├── db.py             # --db historical persistence (stdlib sqlite3)
-│   │   └── baseline.py       # --baseline CI gating
+│   │   ├── baseline.py       # --baseline CI gating
+│   │   └── enforcement.py    # verify-enforcement — active CNI enforcement probe
 │   └── reports/terminal.py   # findings table + history trend table
 ├── tests/
 │   ├── test_netpol_audit.py      # fixture-based, including a real kubernetes-client round trip
-│   └── test_persistence.py       # --db / --baseline
+│   ├── test_persistence.py       # --db / --baseline
+│   └── test_enforcement.py       # verify-enforcement's pure result-interpretation logic
 └── .github/workflows/ci.yml      # spins up a real `kind` cluster for full integration testing
 ```
 
@@ -98,9 +113,15 @@ Docker) cluster via `helm/kind-action`, deploys real pods and
 NetworkPolicies covering every detection case on both ingress and
 egress (coverage gap, allow-all rule, explicit 0.0.0.0/0, and a
 properly-restricted control case), and runs `netpol-audit scan`,
-`history`, and `--baseline` gating against it for real. This is the
-first and only place this tool's live-cluster path is genuinely
-verified end-to-end, not just unit-tested against fixture data.
+`history`, and `--baseline` gating against it for real. It also runs
+`verify-enforcement` for real against this same cluster — since
+whether the cluster's actual CNI enforces NetworkPolicy depends on the
+specific kindnet build in use, CI doesn't assume a fixed outcome; it
+asserts the command's real exit-code/finding-severity contract holds
+for whatever the live probe result actually is. This is the first and
+only place this tool's live-cluster path is genuinely verified
+end-to-end, not
+just unit-tested against fixture data.
 
 ---
 

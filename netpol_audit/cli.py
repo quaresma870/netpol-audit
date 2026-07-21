@@ -91,6 +91,61 @@ def history(db_path, limit):
     print_history(runs)
 
 
+@cli.command("verify-enforcement")
+@click.option("--namespace", "-n", default=None,
+              help="Existing namespace to run the test in (default: create and delete a temporary one).")
+@click.option("--kubeconfig", default=None, help="Path to a kubeconfig file (default: standard kubectl resolution).")
+@click.option("--context", default=None, help="kubeconfig context to use (default: current context).")
+@click.option("--timeout", default=60, show_default=True, help="Seconds to wait for the test pods to become ready.")
+@click.option("--keep", is_flag=True, default=False,
+              help="Don't delete the test pods/policy/namespace afterward (for debugging).")
+@click.option("--json", "json_output", default=None, type=click.Path())
+def verify_enforcement(namespace, kubeconfig, context, timeout, keep, json_output):
+    """Actively verify the cluster's CNI enforces NetworkPolicy at all.
+
+    Deploys a real client pod, a real server pod, and a deny-all ingress
+    NetworkPolicy, then attempts a real connection to check whether it's
+    actually blocked. Auditing declared NetworkPolicy objects (as 'scan'
+    does) can't catch this: some CNIs accept NetworkPolicy objects without
+    enforcing them, silently making every policy in the cluster
+    non-functional. This creates and deletes real cluster resources.
+    """
+    from netpol_audit.core.cluster import ClusterConnectionError, load_kube_config
+    from netpol_audit.core.enforcement import run_enforcement_probe
+    from netpol_audit.reports.terminal import print_findings
+
+    try:
+        load_kube_config(kubeconfig_path=kubeconfig, context=context)
+    except ClusterConnectionError as exc:
+        console.print(f"[red]✘ {exc}[/red]")
+        sys.exit(1)
+
+    console.print("Deploying a real client pod, server pod, and deny-all NetworkPolicy to test enforcement...")
+    try:
+        finding = run_enforcement_probe(namespace=namespace, timeout=timeout, keep=keep)
+    except Exception as exc:
+        console.print(f"[red]✘ Enforcement probe failed: {exc}[/red]")
+        sys.exit(1)
+
+    findings = [finding] if finding else [{
+        "severity": "INFO",
+        "title": "CNI correctly enforces NetworkPolicy",
+        "target": "cluster",
+        "description": "A deny-all ingress NetworkPolicy was applied to a real test pod, and a "
+                        "real connection attempt from another pod was correctly blocked.",
+    }]
+    print_findings("CNI enforcement verification", findings)
+
+    if json_output:
+        import json as json_module
+        with open(json_output, "w") as f:
+            json_module.dump(findings, f, indent=2)
+        console.print(f"[green]✔[/green] Wrote {len(findings)} finding(s) to {json_output}")
+
+    if any(f["severity"] == "CRITICAL" for f in findings):
+        sys.exit(1)
+
+
 def main():
     cli()
 
