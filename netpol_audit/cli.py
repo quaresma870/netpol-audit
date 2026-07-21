@@ -38,6 +38,7 @@ def scan(namespace, kubeconfig, context, json_output, db_path, baseline_path):
         fetch_pods,
         load_kube_config,
     )
+    from netpol_audit.core.mesh import analyze_peer_authentications, fetch_peer_authentications
     from netpol_audit.reports.terminal import print_findings
 
     try:
@@ -51,6 +52,16 @@ def scan(namespace, kubeconfig, context, json_output, db_path, baseline_path):
     console.print(f"Fetched {len(pods)} pod(s) and {len(policies)} NetworkPolic{'y' if len(policies) == 1 else 'ies'}.")
 
     findings = analyze(pods, policies)
+
+    try:
+        peer_auths = fetch_peer_authentications(namespace=namespace)
+    except Exception as exc:
+        console.print(f"[yellow]![/yellow] Skipping Istio mTLS check: {exc}")
+        peer_auths = None
+    if peer_auths is not None:
+        console.print(f"Detected Istio service mesh ({len(peer_auths)} PeerAuthentication object(s)).")
+        findings.extend(analyze_peer_authentications(peer_auths))
+
     label = f"namespace: {namespace}" if namespace else "all namespaces"
     print_findings(label, findings)
 

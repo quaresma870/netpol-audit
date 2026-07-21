@@ -3,6 +3,26 @@
 All notable changes to this project are documented here. See the
 [README](README.md) for current features and usage.
 
+### v0.5.0
+- feat: **Istio mTLS awareness** — `scan` now also reads Istio's `PeerAuthentication` custom
+  resources (read-only, part of the normal scan, no new flag needed) and flags `PERMISSIVE` mode
+  (MEDIUM — accepts both mTLS and plaintext, Istio's own default and often left unlocked after
+  rollout) and `DISABLE` mode (HIGH — no mTLS at all). NetworkPolicy operates at L3/L4 and can't
+  see this layer at all; a cluster with no Istio installed (or without RBAC to list the CRD) is
+  unaffected — the check silently finds nothing to say rather than erroring, since running a
+  service mesh isn't a requirement this tool assumes.
+- scope: Linkerd isn't covered by this check. Its default mTLS is automatic at the proxy level for
+  meshed pods rather than a single declarative mode field like Istio's `PeerAuthentication`, so a
+  comparable check needs a different model — left as a follow-up (see ROADMAP.md).
+- test: 9 new tests for `core/mesh.py`'s pure PeerAuthentication-mode interpretation, using
+  fixtures shaped like real Istio API objects (nested metadata/spec/mtls, missing fields, implicit
+  istio-system namespace). The live CustomObjectsApi lookup needs a real cluster and is only
+  exercised in CI.
+- CI: the real `kind` cluster integration test now also confirms the Istio check degrades
+  gracefully against a cluster that genuinely has no Istio installed — `scan` produces no mTLS
+  findings and no error, and a direct call to `fetch_peer_authentications` confirms the CRD lookup
+  returns `None` rather than raising.
+
 ### v0.4.0
 - feat: **`netpol-audit verify-enforcement`** — actively verifies the cluster's CNI enforces
   NetworkPolicy at all, not just that NetworkPolicy objects exist and are well-formed. Deploys a

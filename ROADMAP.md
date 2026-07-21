@@ -40,12 +40,18 @@
   configurations don't), which the rest of this tool can't detect since it only audits *declared*
   configuration via the Kubernetes API, not actual enforced network behavior.
 
+### v0.5.0
+- mTLS / service mesh awareness (Istio). NetworkPolicy is only the L3/L4 layer — `scan` now also
+  reads Istio's `PeerAuthentication` objects (read-only, part of the normal scan) and flags
+  `PERMISSIVE` mode (accepts both mTLS and plaintext) and `DISABLE` mode (no mTLS at all). A
+  cluster with no Istio installed produces no findings from this check, not an error.
+
 ## Next
 
-### mTLS / service mesh awareness (Istio, Linkerd)
-NetworkPolicy is only the L3/L4 layer — many real cloud-native NF
-deployments also run a service mesh for mTLS between services. A
-future module checking whether mTLS is actually enforced
-(PeerAuthentication in Istio, or Linkerd's equivalent), not just
-whether NetworkPolicy objects exist, would cover the layer this tool
-doesn't touch at all yet.
+### Linkerd mTLS awareness
+The Istio check above doesn't cover Linkerd: Linkerd's default mTLS is automatic at the proxy
+level for meshed pods (identity issued to every injected sidecar), rather than a single
+declarative mode field like Istio's `PeerAuthentication`. A comparable check needs a different
+model — likely: confirming pods are actually proxy-injected (not just that injection is enabled at
+the namespace level), and, for clusters using Linkerd's policy API, auditing `Server` /
+`AuthorizationPolicy` objects for rules that accept unauthenticated/non-mTLS traffic.
